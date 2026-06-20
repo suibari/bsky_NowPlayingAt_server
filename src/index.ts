@@ -1,0 +1,78 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+// Load .env if present (for local dev)
+try {
+  const envPath = resolve(process.cwd(), '.env');
+  const lines = readFileSync(envPath, 'utf-8').split('\n');
+  for (const line of lines) {
+    const [key, ...rest] = line.split('=');
+    if (key && rest.length) {
+      process.env[key.trim()] ??= rest.join('=').trim();
+    }
+  }
+} catch {
+  // .env not found — rely on systemd EnvironmentFile or shell env
+}
+
+import { getAllEnabledUsers, updateLastScrobble } from './db.js';
+import { getLatestScrobble } from './lastfm.js';
+
+const POLL_INTERVAL_MS = 60_000;
+const API_URL = process.env.NOWPLAYINGAT_API_URL ?? 'https://nowplayingat.suibari.com';
+const SHARED_SECRET = process.env.NOWPLAYINGAT_SHARED_SECRET!;
+
+if (!SHARED_SECRET) {
+  console.error('NOWPLAYINGAT_SHARED_SECRET is not set');
+  process.exit(1);
+}
+
+async function tick() {
+  let users;
+  try {
+    users = await getAllEnabledUsers();
+  } catch (e) {
+    console.error('[poller] Failed to fetch enabled users:', e);
+    return;
+  }
+
+  for (const user of users) {
+    try {
+      const scrobble = await getLatestScrobble(user.lastfm_username);
+      if (!scrobble) continue;
+
+      const key = `${scrobble.artist}::${scrobble.title}`;
+      if (key === user.last_scrobble_key) continue;
+
+      const res = await fetch(`${API_URL}/api/auto-post`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SHARED_SECRET}`,
+        },
+        body: JSON.stringify({
+          did: user.did,
+          artist: scrobble.artist,
+          title: scrobble.title,
+          album: scrobble.album,
+        }),
+      });
+
+      if (res.ok) {
+        await updateLastScrobble(user.did, key);
+        console.log(`[OK] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title}`);
+      } else {
+        const err = await res.text();
+        console.error(`[ERROR] ${user.bsky_handle}: HTTP ${res.status} ${err}`);
+      }
+    } catch (e) {
+      console.error(`[ERROR] ${user.bsky_handle}:`, e);
+    }
+  }
+}
+
+console.log(`Now Playing poller started. Polling every ${POLL_INTERVAL_MS / 1000}s`);
+
+// Run immediately on start, then on interval
+tick();
+setInterval(tick, POLL_INTERVAL_MS);
