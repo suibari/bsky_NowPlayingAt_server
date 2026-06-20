@@ -60,10 +60,23 @@ async function tick() {
 
       if (res.ok) {
         await updateLastScrobble(user.did, key);
+        const body = await res.json().catch(() => ({}));
+        if (body.warnings?.length) {
+          for (const w of body.warnings) {
+            console.warn(`[WARN] ${user.bsky_handle}: ${w}`);
+          }
+        }
         console.log(`[OK] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title}`);
       } else {
-        const err = await res.text();
-        console.error(`[ERROR] ${user.bsky_handle}: HTTP ${res.status} ${err}`);
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          errMsg += ` — ${body.error ?? JSON.stringify(body)}`;
+          if (body.stack) errMsg += `\n${body.stack}`;
+        } catch {
+          errMsg += ` — ${await res.text().catch(() => '(no body)')}`;
+        }
+        console.error(`[ERROR] ${user.bsky_handle}: ${errMsg}`);
       }
     } catch (e) {
       console.error(`[ERROR] ${user.bsky_handle}:`, e);
