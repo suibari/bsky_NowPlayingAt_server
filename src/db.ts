@@ -1,11 +1,7 @@
-// PostgREST access for reading enabled users and updating scrobble state
+import pg from 'pg';
 
-const POSTGREST_URL = process.env.POSTGREST_URL!;
-const POSTGREST_KEY = process.env.POSTGREST_SERVICE_KEY!;
-
-const headers = () => ({
-  'Content-Type': 'application/json',
-  'Authorization': `Bearer ${POSTGREST_KEY}`,
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
 });
 
 export interface EnabledUser {
@@ -16,17 +12,15 @@ export interface EnabledUser {
 }
 
 export async function getAllEnabledUsers(): Promise<EnabledUser[]> {
-  const res = await fetch(`${POSTGREST_URL}/nowplayingat_sessions?enabled=eq.true`, {
-    headers: headers(),
-  });
-  if (!res.ok) throw new Error(`PostgREST error: ${res.status}`);
-  return res.json();
+  const res = await pool.query<EnabledUser>(
+    'SELECT did, bsky_handle, lastfm_username, last_scrobble_key FROM nowplayingat.sessions WHERE enabled = true'
+  );
+  return res.rows;
 }
 
 export async function updateLastScrobble(did: string, key: string): Promise<void> {
-  await fetch(`${POSTGREST_URL}/nowplayingat_sessions?did=eq.${encodeURIComponent(did)}`, {
-    method: 'PATCH',
-    headers: headers(),
-    body: JSON.stringify({ last_scrobble_key: key, last_scrobble_ts: new Date().toISOString() }),
-  });
+  await pool.query(
+    'UPDATE nowplayingat.sessions SET last_scrobble_key = $1, last_scrobble_ts = now() WHERE did = $2',
+    [key, did]
+  );
 }
