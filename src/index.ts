@@ -19,6 +19,7 @@ import { getAllEnabledUsers, updateLastScrobble } from './db.js';
 import { getLatestScrobble } from './lastfm.js';
 
 const POLL_INTERVAL_MS = 60_000;
+const INTER_USER_DELAY_MS = 250;
 const API_URL = process.env.NOWPLAYINGAT_API_URL ?? 'https://nowplayingat.suibari.com';
 const SHARED_SECRET = process.env.NOWPLAYINGAT_SHARED_SECRET!;
 
@@ -81,6 +82,7 @@ async function tick() {
     } catch (e) {
       console.error(`[ERROR] ${user.bsky_handle}:`, e);
     }
+    await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
   }
 }
 
