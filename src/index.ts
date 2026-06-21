@@ -15,11 +15,12 @@ try {
   // .env not found — rely on systemd EnvironmentFile or shell env
 }
 
-import { getAllEnabledUsers, updateLastScrobble } from './db.js';
+import { getAllEnabledUsers, updateLastScrobble, updateLastScrobbleKeyOnly } from './db.js';
 import { getLatestScrobble } from './lastfm.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const INTER_USER_DELAY_MS = 250;
+const ONE_HOUR_MS = 60 * 60 * 1000;
 const API_URL = process.env.NOWPLAYINGAT_API_URL ?? 'https://nowplayingat.suibari.com';
 const SHARED_SECRET = process.env.NOWPLAYINGAT_SHARED_SECRET!;
 
@@ -45,6 +46,19 @@ async function tick() {
       const key = `${scrobble.artist}::${scrobble.title}`;
       if (key === user.last_scrobble_key) continue;
 
+      const lastPostMs = user.last_scrobble_ts ? new Date(user.last_scrobble_ts).getTime() : 0;
+      const hourElapsed = (Date.now() - lastPostMs) >= ONE_HOUR_MS;
+      const probabilityHit = Math.random() * 100 < user.post_probability;
+
+      if (!hourElapsed && !probabilityHit) {
+        await updateLastScrobbleKeyOnly(user.did, key);
+        console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (probability miss, ${user.post_probability}%)`);
+        await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
+        continue;
+      }
+
+      const bypassReason = hourElapsed && !probabilityHit ? 'forced 1h bypass' : `${user.post_probability}%`;
+
       const res = await fetch(`${API_URL}/api/auto-post`, {
         method: 'POST',
         headers: {
@@ -67,7 +81,7 @@ async function tick() {
             console.warn(`[WARN] ${user.bsky_handle}: ${w}`);
           }
         }
-        console.log(`[OK] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title}`);
+        console.log(`[OK] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (${bypassReason})`);
       } else {
         let errMsg = `HTTP ${res.status}`;
         try {
