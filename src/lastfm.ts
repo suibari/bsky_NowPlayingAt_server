@@ -7,7 +7,9 @@ export interface Scrobble {
 const MAX_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1500;
 
-export async function getLatestScrobble(username: string): Promise<Scrobble | null> {
+export async function getLatestScrobble(
+  username: string,
+): Promise<{ scrobble: Scrobble | null; isListening: boolean }> {
   const url = new URL('https://ws.audioscrobbler.com/2.0/');
   url.searchParams.set('method', 'user.getRecentTracks');
   url.searchParams.set('user', username);
@@ -22,20 +24,26 @@ export async function getLatestScrobble(username: string): Promise<Scrobble | nu
       const data = await res.json();
       if (data.error) {
         console.warn(`[lastfm] API error for ${username}: ${data.message}`);
-        return null;
+        return { scrobble: null, isListening: false };
       }
 
       const tracks: any[] = data?.recenttracks?.track ?? [];
+      let isListening = false;
       for (const t of tracks) {
-        // Skip currently-playing (not yet scrobbled)
-        if (t?.['@attr']?.nowplaying) continue;
+        if (t?.['@attr']?.nowplaying) {
+          isListening = true;
+          continue;
+        }
         return {
-          artist: t.artist['#text'],
-          title: t.name,
-          album: t.album['#text'],
+          scrobble: {
+            artist: t.artist['#text'],
+            title: t.name,
+            album: t.album['#text'],
+          },
+          isListening,
         };
       }
-      return null;
+      return { scrobble: null, isListening };
     }
 
     const bodyText = await res.text().catch(() => '(unreadable)');
@@ -52,7 +60,7 @@ export async function getLatestScrobble(username: string): Promise<Scrobble | nu
     }
 
     console.warn(`[lastfm] HTTP ${res.status} for user ${username} — ${detail}`);
-    return null;
+    return { scrobble: null, isListening: false };
   }
-  return null;
+  return { scrobble: null, isListening: false };
 }

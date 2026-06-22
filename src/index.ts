@@ -40,7 +40,7 @@ async function tick() {
 
   for (const user of users) {
     try {
-      const scrobble = await getLatestScrobble(user.lastfm_username);
+      const { scrobble, isListening } = await getLatestScrobble(user.lastfm_username);
       if (!scrobble) continue;
 
       const key = `${scrobble.artist}::${scrobble.title}`;
@@ -48,16 +48,22 @@ async function tick() {
 
       const lastPostMs = user.last_scrobble_ts ? new Date(user.last_scrobble_ts).getTime() : 0;
       const hourElapsed = (Date.now() - lastPostMs) >= ONE_HOUR_MS;
+      // hourElapsed bypass only fires when the user is actively listening, to avoid
+      // posting the last song before a gap instead of the first song after returning.
+      const hourElapsedAndListening = hourElapsed && isListening;
       const probabilityHit = Math.random() * 100 < user.post_probability;
 
-      if (!hourElapsed && !probabilityHit) {
+      if (!hourElapsedAndListening && !probabilityHit) {
         await updateLastScrobbleKeyOnly(user.did, key);
-        console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (probability miss, ${user.post_probability}%)`);
+        const skipReason = hourElapsed && !isListening
+          ? 'gap detected, not listening'
+          : `probability miss, ${user.post_probability}%`;
+        console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (${skipReason})`);
         await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
         continue;
       }
 
-      const bypassReason = hourElapsed && !probabilityHit ? 'forced 1h bypass' : `${user.post_probability}%`;
+      const bypassReason = hourElapsedAndListening && !probabilityHit ? 'forced 1h bypass' : `${user.post_probability}%`;
 
       const res = await fetch(`${API_URL}/api/auto-post`, {
         method: 'POST',
