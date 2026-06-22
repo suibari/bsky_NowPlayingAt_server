@@ -2,6 +2,7 @@ export interface Scrobble {
   artist: string;
   title: string;
   album: string;
+  playedAt: number | null; // ms epoch。Last.fm の date.uts より。不明なら null
 }
 
 const MAX_ATTEMPTS = 2;
@@ -39,6 +40,7 @@ export async function getLatestScrobble(
             artist: t.artist['#text'],
             title: t.name,
             album: t.album['#text'],
+            playedAt: t.date?.uts ? Number(t.date.uts) * 1000 : null,
           },
           isListening,
         };
