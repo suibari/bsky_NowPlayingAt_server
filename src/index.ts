@@ -55,11 +55,52 @@ async function tick() {
       const probabilityHit = Math.random() * 100 < user.post_probability;
 
       if (!forcedBypass && !probabilityHit) {
-        await updateLastScrobbleKeyOnly(user.did, key);
-        const skipReason = hourElapsed && !playedRecently
-          ? 'gap detected, stale track'
-          : `probability miss, ${user.post_probability}%`;
-        console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (${skipReason})`);
+        const staleTrack = hourElapsed && !playedRecently;
+        if (staleTrack) {
+          // ギャップ後の古い曲。再生記録としても残さずスキップ（postedAt の整合性を保つ）。
+          await updateLastScrobbleKeyOnly(user.did, key);
+          console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (gap detected, stale track)`);
+          await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
+          continue;
+        }
+
+        // 確率ミス: 投稿はしないが PDS history に再生記録は残す。
+        const res = await fetch(`${API_URL}/api/auto-post`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SHARED_SECRET}`,
+          },
+          body: JSON.stringify({
+            did: user.did,
+            artist: scrobble.artist,
+            title: scrobble.title,
+            album: scrobble.album,
+            skipPost: true,
+          }),
+        });
+
+        if (res.ok) {
+          // 投稿は発生していないので last_scrobble_ts は更新しない（forced 1h bypass 判定を維持）。
+          await updateLastScrobbleKeyOnly(user.did, key);
+          const body = await res.json().catch(() => ({}));
+          if (body.warnings?.length) {
+            for (const w of body.warnings) {
+              console.warn(`[WARN] ${user.bsky_handle}: ${w}`);
+            }
+          }
+          console.log(`[HISTORY] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (probability miss, ${user.post_probability}%)`);
+        } else {
+          let errMsg = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            errMsg += ` — ${body.error ?? JSON.stringify(body)}`;
+            if (body.stack) errMsg += `\n${body.stack}`;
+          } catch {
+            errMsg += ` — ${await res.text().catch(() => '(no body)')}`;
+          }
+          console.error(`[ERROR] ${user.bsky_handle} (history): ${errMsg}`);
+        }
         await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
         continue;
       }
