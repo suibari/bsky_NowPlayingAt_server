@@ -51,18 +51,20 @@ async function tick() {
       // この完了曲がギャップ後に新しく再生されたものか（ギャップ前の古い曲を弾く）。
       // 1時間以上のギャップがあれば、ギャップ前の曲の再生時刻は1時間以上前になる。
       const playedRecently = scrobble.playedAt != null && (Date.now() - scrobble.playedAt) < ONE_HOUR_MS;
+      
+      const staleTrack = hourElapsed && !playedRecently;
+      if (staleTrack) {
+        // ギャップ後の古い曲。再生記録としても残さずスキップ（postedAt の整合性を保つ）。
+        await updateLastScrobbleKeyOnly(user.did, key);
+        console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (gap detected, stale track)`);
+        await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
+        continue;
+      }
+
       const forcedBypass = hourElapsed && playedRecently;
       const probabilityHit = Math.random() * 100 < user.post_probability;
 
       if (!forcedBypass && !probabilityHit) {
-        const staleTrack = hourElapsed && !playedRecently;
-        if (staleTrack) {
-          // ギャップ後の古い曲。再生記録としても残さずスキップ（postedAt の整合性を保つ）。
-          await updateLastScrobbleKeyOnly(user.did, key);
-          console.log(`[SKIP] ${user.bsky_handle}: ${scrobble.artist} - ${scrobble.title} (gap detected, stale track)`);
-          await new Promise(r => setTimeout(r, INTER_USER_DELAY_MS));
-          continue;
-        }
 
         // 確率ミス: 投稿はしないが PDS history に再生記録は残す。
         const res = await fetch(`${API_URL}/api/auto-post`, {
