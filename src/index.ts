@@ -17,8 +17,10 @@ try {
 
 import { getAllEnabledUsers, updateLastScrobble, updateLastScrobbleKeyOnly } from './db.js';
 import { getLatestScrobble } from './lastfm.js';
+import { getGlobalTimeline, getHotContent } from './bsky.js';
 
 const POLL_INTERVAL_MS = 60_000;
+const CACHE_REFRESH_INTERVAL_MS = 10 * 60_000;
 const INTER_USER_DELAY_MS = 250;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const API_URL = process.env.NOWPLAYINGAT_API_URL ?? 'https://nowplayingat.suibari.com';
@@ -51,7 +53,7 @@ async function tick() {
       // この完了曲がギャップ後に新しく再生されたものか（ギャップ前の古い曲を弾く）。
       // 1時間以上のギャップがあれば、ギャップ前の曲の再生時刻は1時間以上前になる。
       const playedRecently = scrobble.playedAt != null && (Date.now() - scrobble.playedAt) < ONE_HOUR_MS;
-      
+
       const staleTrack = hourElapsed && !playedRecently;
       if (staleTrack) {
         // ギャップ後の古い曲。再生記録としても残さずスキップ（postedAt の整合性を保つ）。
@@ -150,8 +152,43 @@ async function tick() {
   }
 }
 
+async function pushCache(key: 'hot' | 'timeline', data: any) {
+  try {
+    const res = await fetch(`${API_URL}/api/cache`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SHARED_SECRET}`,
+      },
+      body: JSON.stringify({ key, data }),
+    });
+    if (!res.ok) {
+      console.error(`[CACHE] Failed to push ${key}: ${res.status}`);
+    } else {
+      console.log(`[CACHE] Successfully pushed ${key} to KV`);
+    }
+  } catch (e) {
+    console.error(`[CACHE] Error pushing ${key}:`, e);
+  }
+}
+
+async function refreshCache() {
+  console.log('[CACHE] Starting refresh...');
+  try {
+    const [hot, timeline] = await Promise.all([getHotContent(), getGlobalTimeline()]);
+    await pushCache('hot', hot);
+    await pushCache('timeline', timeline);
+  } catch (e) {
+    console.error('[CACHE] Error during refresh:', e);
+  }
+}
+
 console.log(`Now Playing poller started. Polling every ${POLL_INTERVAL_MS / 1000}s`);
 
 // Run immediately on start, then on interval
 tick();
 setInterval(tick, POLL_INTERVAL_MS);
+
+// Run cache refresh immediately on start, then on interval
+refreshCache();
+setInterval(refreshCache, CACHE_REFRESH_INTERVAL_MS);
