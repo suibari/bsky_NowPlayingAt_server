@@ -132,6 +132,78 @@ export async function getGlobalTimeline() {
   return sorted();
 }
 
+// --- GLOBAL PLAY STATS ---
+
+const STATS_BATCH_SIZE = 25;
+const STATS_DAILY_RETENTION_DAYS = 30;
+const STATS_MAX_PAGES_PER_USER = 100; // safety cap: 100 pages * 100 = 10k records/user
+
+// JST (UTC+9) calendar day so day boundaries match the app's primary audience.
+function dayKeyJST(iso?: string): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return null;
+  return new Date(t + 9 * 60 * 60 * 1000).toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+/**
+ * Aggregate ALL history records across every registered user into a global
+ * play counter. Walks each user's full PDS history (paginated) so historical
+ * records are counted, not just new ones — `totalPlays` is the all-time count
+ * and `daily` buckets the last 30 days by each record's postedAt/createdAt.
+ */
+export async function getPlayStats(): Promise<{ totalPlays: number; daily: Record<string, number>; updatedAt: number }> {
+  const backlinks = await getBacklinks(HUB_REF, `${NSID_CONFIG}:hubRef`);
+  const userDids = Array.from(new Set(backlinks.map(b => b.did)));
+
+  let totalPlays = 0;
+  const daily: Record<string, number> = {};
+  const dailyCutoff = Date.now() - STATS_DAILY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+  const batches: string[][] = [];
+  for (let i = 0; i < userDids.length; i += STATS_BATCH_SIZE) {
+    batches.push(userDids.slice(i, i + STATS_BATCH_SIZE));
+  }
+
+  for (const batch of batches) {
+    await Promise.all(batch.map(async (did) => {
+      const pds = await getPdsEndpoint(did);
+      if (!pds) return;
+      const pdsAgent = new Agent({ service: pds });
+
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        let res;
+        try {
+          res = await pdsAgent.com.atproto.repo.listRecords({
+            repo: did,
+            collection: NSID_HISTORY,
+            limit: 100,
+            cursor,
+          });
+        } catch (e) {
+          console.warn(`[stats] listRecords failed for ${did}`, e);
+          break;
+        }
+        for (const r of res.data.records as any[]) {
+          totalPlays++;
+          const iso = r.value.postedAt || r.value.createdAt;
+          const ts = iso ? new Date(iso).getTime() : NaN;
+          if (!isNaN(ts) && ts >= dailyCutoff) {
+            const key = dayKeyJST(iso);
+            if (key) daily[key] = (daily[key] ?? 0) + 1;
+          }
+        }
+        cursor = res.data.cursor;
+        pages++;
+      } while (cursor && pages < STATS_MAX_PAGES_PER_USER);
+    }));
+  }
+
+  return { totalPlays, daily, updatedAt: Date.now() };
+}
+
 // --- HOT CONTENT ---
 
 export function songKey(artist?: string, track?: string, fallback?: string): string {

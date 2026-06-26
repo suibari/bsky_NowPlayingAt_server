@@ -17,10 +17,13 @@ try {
 
 import { getAllEnabledUsers, updateLastScrobble, updateLastScrobbleKeyOnly } from './db.js';
 import { getLatestScrobble } from './lastfm.js';
-import { getGlobalTimeline, getHotContent } from './bsky.js';
+import { getGlobalTimeline, getHotContent, getPlayStats } from './bsky.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const CACHE_REFRESH_INTERVAL_MS = 10 * 60_000;
+// Full history scan is heavier than the hot/timeline refresh, and all-time
+// totals don't need 10-minute freshness — run it on a slower cadence.
+const STATS_REFRESH_INTERVAL_MS = 30 * 60_000;
 const INTER_USER_DELAY_MS = 250;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const API_URL = process.env.NOWPLAYINGAT_API_URL ?? 'https://nowplayingat.suibari.com';
@@ -152,7 +155,7 @@ async function tick() {
   }
 }
 
-async function pushCache(key: 'hot' | 'timeline', data: any) {
+async function pushCache(key: 'hot' | 'timeline' | 'stats', data: any) {
   try {
     const res = await fetch(`${API_URL}/api/cache`, {
       method: 'PUT',
@@ -183,6 +186,17 @@ async function refreshCache() {
   }
 }
 
+async function refreshStats() {
+  console.log('[STATS] Starting global play-stats scan...');
+  try {
+    const stats = await getPlayStats();
+    await pushCache('stats', stats);
+    console.log(`[STATS] totalPlays=${stats.totalPlays}, days=${Object.keys(stats.daily).length}`);
+  } catch (e) {
+    console.error('[STATS] Error during refresh:', e);
+  }
+}
+
 console.log(`Now Playing poller started. Polling every ${POLL_INTERVAL_MS / 1000}s`);
 
 // Run immediately on start, then on interval
@@ -192,3 +206,7 @@ setInterval(tick, POLL_INTERVAL_MS);
 // Run cache refresh immediately on start, then on interval
 refreshCache();
 setInterval(refreshCache, CACHE_REFRESH_INTERVAL_MS);
+
+// Global play-stats scan (heavier; slower cadence)
+refreshStats();
+setInterval(refreshStats, STATS_REFRESH_INTERVAL_MS);
