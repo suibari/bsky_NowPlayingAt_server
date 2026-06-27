@@ -20,7 +20,7 @@ import { getLatestScrobble } from './lastfm.js';
 import { getGlobalTimeline, getHotContent, getPlayStats } from './bsky.js';
 
 const POLL_INTERVAL_MS = 60_000;
-const CACHE_REFRESH_INTERVAL_MS = 10 * 60_000;
+const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000;
 // Full history scan is heavier than the hot/timeline refresh, and all-time
 // totals don't need 10-minute freshness — run it on a slower cadence.
 const STATS_REFRESH_INTERVAL_MS = 30 * 60_000;
