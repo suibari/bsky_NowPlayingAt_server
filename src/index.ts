@@ -16,8 +16,9 @@ try {
 }
 
 import { getAllEnabledUsers, updateLastScrobble, updateLastScrobbleKeyOnly } from './db.js';
-import { getLatestScrobble } from './lastfm.js';
+import { getLatestScrobble, getGenreTags } from './lastfm.js';
 import { getGlobalTimeline, getHotContent, getPlayStats } from './bsky.js';
+import { normalizeGenres } from './ollama.js';
 
 const POLL_INTERVAL_MS = 60_000;
 const CACHE_REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -69,6 +70,11 @@ async function tick() {
       const forcedBypass = hourElapsed && playedRecently;
       const probabilityHit = Math.random() * 100 < user.post_probability;
 
+      // Derive genres for the recommendation profile (non-fatal). Done once per
+      // new track and attached to both the skip and post paths below.
+      const tags = await getGenreTags(scrobble.artist, scrobble.title);
+      const genres = await normalizeGenres(tags);
+
       if (!forcedBypass && !probabilityHit) {
 
         // 確率ミス: 投稿はしないが PDS history に再生記録は残す。
@@ -83,6 +89,7 @@ async function tick() {
             artist: scrobble.artist,
             title: scrobble.title,
             album: scrobble.album,
+            genres,
             skipPost: true,
           }),
         });
@@ -125,6 +132,7 @@ async function tick() {
           artist: scrobble.artist,
           title: scrobble.title,
           album: scrobble.album,
+          genres,
         }),
       });
 
@@ -155,7 +163,7 @@ async function tick() {
   }
 }
 
-async function pushCache(key: 'hot' | 'timeline' | 'stats', data: any) {
+async function pushCache(key: 'hot' | 'timeline' | 'stats' | 'user_profiles', data: any) {
   try {
     const res = await fetch(`${API_URL}/api/cache`, {
       method: 'PUT',
@@ -179,8 +187,11 @@ async function refreshCache() {
   console.log('[CACHE] Starting refresh...');
   try {
     const [hot, timeline] = await Promise.all([getHotContent(), getGlobalTimeline()]);
-    await pushCache('hot', hot);
+    // userProfiles feeds the recommendation score; keep it out of the public 'hot' payload.
+    const { userProfiles, ...hotPublic } = hot;
+    await pushCache('hot', hotPublic);
     await pushCache('timeline', timeline);
+    await pushCache('user_profiles', userProfiles ?? {});
   } catch (e) {
     console.error('[CACHE] Error during refresh:', e);
   }

@@ -66,3 +66,41 @@ export async function getLatestScrobble(
   }
   return { scrobble: null, isListening: false };
 }
+
+async function fetchTopTags(params: Record<string, string>, limit: number): Promise<string[]> {
+  const url = new URL('https://ws.audioscrobbler.com/2.0/');
+  url.searchParams.set('api_key', process.env.LASTFM_API_KEY!);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('autocorrect', '1');
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+  const res = await fetch(url.toString());
+  if (!res.ok) return [];
+  const data = await res.json();
+  const tags: any[] = data?.toptags?.tag ?? [];
+  return tags
+    .map((t) => (typeof t?.name === 'string' ? t.name.trim() : ''))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+// Top community tags for a track, falling back to the artist's tags when the
+// track has none (track-level tags are sparse even for popular songs).
+// Non-fatal: returns [] on any failure. Used to derive genres via the LLM.
+export async function getGenreTags(
+  artist: string,
+  title: string,
+  limit = 5,
+): Promise<string[]> {
+  try {
+    const trackTags = await fetchTopTags(
+      { method: 'track.getTopTags', artist, track: title },
+      limit,
+    );
+    if (trackTags.length > 0) return trackTags;
+    return await fetchTopTags({ method: 'artist.getTopTags', artist }, limit);
+  } catch (e) {
+    console.warn(`[lastfm] getGenreTags failed for ${artist} - ${title}:`, e);
+    return [];
+  }
+}

@@ -4,6 +4,7 @@ import { getHiddenFromFeedDids } from './db.js';
 import { Agent } from '@atproto/api';
 import { NSID_HISTORY, NSID_CONFIG, NSID_REACTION, NSID_PLAYLIST } from './schema.js';
 import type { ReactionRecord, ConstellationRecord, PlaylistRecord } from './schema.js';
+import { recommendSongKey } from './normalize.js';
 
 // --- PLAYLISTS ---
 
@@ -254,7 +255,7 @@ export async function getHotContent() {
 
   const userDids = Array.from(uniqueDids);
   if (userDids.length === 0) {
-    return { tracks: [], playlists: [], users: [] };
+    return { tracks: [], playlists: [], users: [], userProfiles: {} as Record<string, { songKeys: string[], genreFreq: Record<string, number> }> };
   }
 
   const profilesMap = new Map<string, any>();
@@ -265,6 +266,17 @@ export async function getHotContent() {
   const playlistStats = new Map<string, HotStat>();
   const userStats = new Map<string, { profile: any, count: number, recent24: number }>();
   const playlistCache = new Map<string, any>();
+
+  // Per-user listening profile for the recommendation score (Jaccard + genre).
+  // Built from the same 7-day history scan below (no extra PDS fetches); the
+  // 7-day window is intentionally reused for v1. genreFreq tolerates both the
+  // current `genres: string[]` and legacy Phase-1 `genre: string` records.
+  const userProfiles = new Map<string, { songKeys: Set<string>, genreFreq: Record<string, number> }>();
+  const profileFor = (did: string) => {
+    let p = userProfiles.get(did);
+    if (!p) { p = { songKeys: new Set(), genreFreq: {} }; userProfiles.set(did, p); }
+    return p;
+  };
 
   try {
     const chunks = [];
@@ -361,7 +373,13 @@ export async function getHotContent() {
       }))
       .filter(u => u.did);
 
-    return { tracks, playlists, users };
+    const profiles: Record<string, { songKeys: string[], genreFreq: Record<string, number> }> = {};
+    for (const [did, p] of userProfiles) {
+      if (p.songKeys.size === 0) continue;
+      profiles[did] = { songKeys: Array.from(p.songKeys), genreFreq: p.genreFreq };
+    }
+
+    return { tracks, playlists, users, userProfiles: profiles };
   };
 
   const batches: string[][] = [];
@@ -411,6 +429,19 @@ export async function getHotContent() {
             }
             us.count++;
             if (ts >= Date.now() - TRENDING_WINDOW_MS) us.recent24++;
+
+            // Recommendation profile: every history record in the window (posted or not).
+            const rk = recommendSongKey(v.artist, v.track);
+            if (rk) {
+              const prof = profileFor(did);
+              prof.songKeys.add(rk);
+              const gs: string[] = Array.isArray(v.genres) ? v.genres : (v.genre ? [v.genre] : []);
+              for (const g of gs) {
+                const gk = String(g).trim().toLowerCase();
+                if (gk) prof.genreFreq[gk] = (prof.genreFreq[gk] || 0) + 1;
+              }
+            }
+
             if (!v.postUri) continue;
             const key = songKey(v.artist, v.track, v.trackUri);
             if (!key) continue;
