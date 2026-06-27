@@ -84,9 +84,21 @@ async function fetchTopTags(params: Record<string, string>, limit: number): Prom
     .slice(0, limit);
 }
 
+// Extract the voice-actor (seiyuu) name from an anison artist credit, but only
+// when a CV/声優/Vo marker is present (so non-CV parens like "(K)NoW_NAME" are
+// never touched). Returns undefined when there's no CV credit.
+function extractSeiyuu(artist: string): string | undefined {
+  const m = artist
+    .normalize('NFKC')
+    .match(/[(（][^)）]*?(?:CV|声優|Vo)[.:：．\s]*([^)）]+?)\s*[)）]/i);
+  return m ? m[1].trim() : undefined;
+}
+
 // Top community tags for a track, falling back to the artist's tags when the
-// track has none (track-level tags are sparse even for popular songs).
-// Non-fatal: returns [] on any failure. Used to derive genres via the LLM.
+// track has none (track-level tags are sparse even for popular songs). For
+// anison character credits ("キャラ名 (CV: 声優)"), Last.fm has no tags under the
+// character name, so as a last resort we retry with the extracted seiyuu name
+// (whose artist page IS tagged). Non-fatal: returns [] on any failure.
 export async function getGenreTags(
   artist: string,
   title: string,
@@ -98,7 +110,15 @@ export async function getGenreTags(
       limit,
     );
     if (trackTags.length > 0) return trackTags;
-    return await fetchTopTags({ method: 'artist.getTopTags', artist }, limit);
+
+    const artistTags = await fetchTopTags({ method: 'artist.getTopTags', artist }, limit);
+    if (artistTags.length > 0) return artistTags;
+
+    const seiyuu = extractSeiyuu(artist);
+    if (seiyuu && seiyuu !== artist) {
+      return await fetchTopTags({ method: 'artist.getTopTags', artist: seiyuu }, limit);
+    }
+    return [];
   } catch (e) {
     console.warn(`[lastfm] getGenreTags failed for ${artist} - ${title}:`, e);
     return [];
