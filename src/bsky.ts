@@ -1,5 +1,6 @@
 import { publicAgent, getPdsEndpoint } from './atproto.js';
 import { getBacklinks } from './constellation.js';
+import { getHiddenFromFeedDids } from './db.js';
 import { Agent } from '@atproto/api';
 import { NSID_HISTORY, NSID_CONFIG, NSID_REACTION, NSID_PLAYLIST } from './schema.js';
 import type { ReactionRecord, ConstellationRecord, PlaylistRecord } from './schema.js';
@@ -32,7 +33,8 @@ const TIMELINE_BATCH_SIZE = 25;
  */
 export async function getGlobalTimeline() {
   const backlinks = await getBacklinks(HUB_REF, `${NSID_CONFIG}:hubRef`);
-  const userDids = Array.from(new Set(backlinks.map(b => b.did)));
+  const hiddenDids = new Set(await getHiddenFromFeedDids().catch(() => [] as string[]));
+  const userDids = Array.from(new Set(backlinks.map(b => b.did))).filter(did => !hiddenDids.has(did));
 
   if (userDids.length === 0) {
     return [];

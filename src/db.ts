@@ -33,3 +33,10 @@ export async function updateLastScrobbleKeyOnly(did: string, key: string): Promi
     [key, did]
   );
 }
+
+export async function getHiddenFromFeedDids(): Promise<string[]> {
+  const res = await pool.query<{ did: string }>(
+    'SELECT did FROM nowplayingat.sessions WHERE hide_from_feed = true'
+  );
+  return res.rows.map(r => r.did);
+}
