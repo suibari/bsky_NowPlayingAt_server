@@ -216,8 +216,9 @@ export function songKey(artist?: string, track?: string, fallback?: string): str
   return fallback || '';
 }
 
-const HOT_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const TRENDING_WINDOW_MS = 24 * 60 * 60 * 1000; 
+const HOT_RANK_MS = 3 * 24 * 60 * 60 * 1000;    // 曲・ユーザーランキング集計期間（3日）
+const HOT_HISTORY_MS = 7 * 24 * 60 * 60 * 1000; // 推薦プロファイル・タイムラインスキャン期間（7日）
+const TRENDING_WINDOW_MS = 24 * 60 * 60 * 1000;
 const TRENDING_MIN = 3;                          
 const HOT_BATCH_SIZE = 25;
 
@@ -269,8 +270,8 @@ export async function getHotContent() {
   const timelineItems: any[] = [];
 
   // Per-user listening profile for the recommendation score (Jaccard + genre).
-  // Built from the same 7-day history scan below (no extra PDS fetches); the
-  // 7-day window is intentionally reused for v1. genreFreq tolerates both the
+  // Built from the 7-day history scan below (HOT_HISTORY_MS, no extra PDS fetches);
+  // rankings use the shorter HOT_RANK_MS window. genreFreq tolerates both the
   // current `genres: string[]` and legacy Phase-1 `genre: string` records.
   const userProfiles = new Map<string, { songKeys: Set<string>, genreFreq: Record<string, number>, artistFreq: Record<string, number> }>();
   const profileFor = (did: string) => {
@@ -290,7 +291,7 @@ export async function getHotContent() {
 
   const addReaction = (r: any) => {
     const ts = new Date(r.createdAt || 0).getTime();
-    if (ts < Date.now() - HOT_WEEK_MS) return;
+    if (ts < Date.now() - HOT_RANK_MS) return;
 
     let stat: HotStat | undefined;
     if (r.kind === 'playlist' && r.playlist?.uri) {
@@ -434,7 +435,7 @@ export async function getHotContent() {
           for (const r of res.data.records) {
             const v = (r.value as any) || {};
             const ts = new Date(v.createdAt || 0).getTime();
-            if (ts < Date.now() - HOT_WEEK_MS) {
+            if (ts < Date.now() - HOT_RANK_MS) {
               keepFetching = false;
               continue;
             }
@@ -465,11 +466,11 @@ export async function getHotContent() {
           for (const r of hRes.data.records) {
             const v = (r.value as any) || {};
             const ts = new Date(v.postedAt || v.createdAt || 0).getTime();
-            if (ts < Date.now() - HOT_WEEK_MS) {
+            if (ts < Date.now() - HOT_HISTORY_MS) {
               keepFetching = false;
               continue;
             }
-            us.count++;
+            if (ts >= Date.now() - HOT_RANK_MS) us.count++;
             if (ts >= Date.now() - TRENDING_WINDOW_MS) us.recent24++;
 
             // Recommendation profile: every history record in the window (posted or not).
@@ -520,7 +521,7 @@ export async function getHotContent() {
           for (const r of pRes.data.records) {
             const v = (r.value as any) || {};
             const tsP = new Date(v.createdAt || 0).getTime();
-            if (tsP >= Date.now() - HOT_WEEK_MS) {
+            if (tsP >= Date.now() - HOT_HISTORY_MS) {
               timelineItems.push({
                 type: 'playlist',
                 author: profilesMap.get(did) || { did, handle: 'unknown' },
