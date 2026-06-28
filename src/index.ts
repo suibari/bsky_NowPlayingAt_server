@@ -17,7 +17,7 @@ try {
 
 import { getAllEnabledUsers, updateLastScrobble, updateLastScrobbleKeyOnly } from './db.js';
 import { getLatestScrobble, getGenreTags } from './lastfm.js';
-import { getGlobalTimeline, getHotContent, getPlayStats } from './bsky.js';
+import { getHotContent, getPlayStats } from './bsky.js';
 import { normalizeGenres } from './ollama.js';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -186,9 +186,9 @@ async function pushCache(key: 'snapshot' | 'stats', data: any) {
 async function refreshCache() {
   console.log('[CACHE] Starting refresh...');
   try {
-    const [hot, timeline] = await Promise.all([getHotContent(), getGlobalTimeline()]);
+    const hot = await getHotContent();
     // userProfiles feeds the recommendation score; keep it out of the public 'hot' payload.
-    const { userProfiles, ...hotPublic } = hot;
+    const { userProfiles, timeline, ...hotPublic } = hot;
     // Combine the three 5-minute payloads into a single KV write to stay well
     // under the 1000 writes/day limit. The read endpoints split them back out.
     await pushCache('snapshot', {

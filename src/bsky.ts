@@ -255,7 +255,7 @@ export async function getHotContent() {
 
   const userDids = Array.from(uniqueDids);
   if (userDids.length === 0) {
-    return { tracks: [], playlists: [], users: [], userProfiles: {} as Record<string, { songKeys: string[], genreFreq: Record<string, number>, artistFreq: Record<string, number> }> };
+    return { tracks: [], playlists: [], users: [], userProfiles: {} as Record<string, { songKeys: string[], genreFreq: Record<string, number>, artistFreq: Record<string, number> }>, timeline: [] };
   }
 
   const profilesMap = new Map<string, any>();
@@ -266,6 +266,7 @@ export async function getHotContent() {
   const playlistStats = new Map<string, HotStat>();
   const userStats = new Map<string, { profile: any, count: number, recent24: number }>();
   const playlistCache = new Map<string, any>();
+  const timelineItems: any[] = [];
 
   // Per-user listening profile for the recommendation score (Jaccard + genre).
   // Built from the same 7-day history scan below (no extra PDS fetches); the
@@ -379,7 +380,40 @@ export async function getHotContent() {
       profiles[did] = { songKeys: Array.from(p.songKeys), genreFreq: p.genreFreq, artistFreq: p.artistFreq };
     }
 
-    return { tracks, playlists, users, userProfiles: profiles };
+    // Hydrate playlist reactions for timeline (reuse playlistCache already populated above)
+    const extraPlaylistUris = new Map<string, { did: string; rkey: string }>();
+    for (const item of timelineItems) {
+      if (item.type === 'reaction' && item.record.kind === 'playlist' && item.record.playlist?.uri) {
+        const uri = item.record.playlist.uri;
+        if (!playlistCache.has(uri) && !extraPlaylistUris.has(uri)) {
+          try {
+            const parts = uri.split('/');
+            const rkey = parts.pop();
+            parts.pop();
+            const did = parts.pop();
+            if (did && rkey) extraPlaylistUris.set(uri, { did, rkey });
+          } catch { /* ignore */ }
+        }
+      }
+    }
+    await Promise.all(Array.from(extraPlaylistUris.entries()).map(async ([uri, { did, rkey }]) => {
+      try {
+        const data = await getPlaylist(did, rkey);
+        if (data?.value) playlistCache.set(uri, data.value);
+      } catch { /* ignore */ }
+    }));
+    for (const item of timelineItems) {
+      if (item.type === 'reaction' && item.record.kind === 'playlist' && item.record.playlist?.uri) {
+        const cached = playlistCache.get(item.record.playlist.uri);
+        if (cached) item.record.playlist.record = cached;
+      }
+    }
+
+    const timeline = [...timelineItems].sort(
+      (a, b) => new Date(b.indexedAt).getTime() - new Date(a.indexedAt).getTime()
+    );
+
+    return { tracks, playlists, users, userProfiles: profiles, timeline };
   };
 
   const batches: string[][] = [];
@@ -405,6 +439,14 @@ export async function getHotContent() {
               continue;
             }
             addReaction({ ...v, author: profilesMap.get(did) || { did, handle: 'unknown' }, uri: r.uri });
+            timelineItems.push({
+              type: 'reaction',
+              author: profilesMap.get(did) || { did, handle: 'unknown' },
+              record: v,
+              uri: r.uri,
+              cid: r.cid,
+              indexedAt: v.createdAt,
+            });
           }
           cursor = res.data.cursor;
           if (!cursor) keepFetching = false;
@@ -444,13 +486,22 @@ export async function getHotContent() {
               if (ak) prof.artistFreq[ak] = (prof.artistFreq[ak] || 0) + 1;
             }
 
+            timelineItems.push({
+              type: 'history',
+              author: profilesMap.get(did) || { did, handle: 'unknown' },
+              record: v,
+              uri: r.uri,
+              cid: r.cid,
+              indexedAt: v.postedAt || v.createdAt,
+            });
+
             if (!v.postUri) continue;
             const key = songKey(v.artist, v.track, v.trackUri);
             if (!key) continue;
             if (!songPosts.has(key)) songPosts.set(key, { postUris: new Set(), meta: v });
             songPosts.get(key)!.postUris.add(v.postUri);
           }
-          
+
           cursor = hRes.data.cursor;
           if (!cursor) keepFetching = false;
         }
@@ -468,6 +519,17 @@ export async function getHotContent() {
           
           for (const r of pRes.data.records) {
             const v = (r.value as any) || {};
+            const tsP = new Date(v.createdAt || 0).getTime();
+            if (tsP >= Date.now() - HOT_WEEK_MS) {
+              timelineItems.push({
+                type: 'playlist',
+                author: profilesMap.get(did) || { did, handle: 'unknown' },
+                record: v,
+                uri: r.uri,
+                cid: r.cid,
+                indexedAt: v.createdAt,
+              });
+            }
             if (!v.postUri) continue;
             const uri = r.uri;
             if (!playlistPosts.has(uri)) playlistPosts.set(uri, { postUris: new Set(), meta: v, author: profilesMap.get(did) || { did, handle: 'unknown' } });
