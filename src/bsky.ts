@@ -4,7 +4,7 @@ import { getHiddenFromFeedDids } from './db.js';
 import { Agent } from '@atproto/api';
 import { NSID_HISTORY, NSID_CONFIG, NSID_REACTION, NSID_PLAYLIST } from './schema.js';
 import type { ReactionRecord, ConstellationRecord, PlaylistRecord } from './schema.js';
-import { recommendSongKey } from './normalize.js';
+import { recommendSongKey, normalizeArtist } from './normalize.js';
 
 // --- PLAYLISTS ---
 
@@ -255,7 +255,7 @@ export async function getHotContent() {
 
   const userDids = Array.from(uniqueDids);
   if (userDids.length === 0) {
-    return { tracks: [], playlists: [], users: [], userProfiles: {} as Record<string, { songKeys: string[], genreFreq: Record<string, number> }> };
+    return { tracks: [], playlists: [], users: [], userProfiles: {} as Record<string, { songKeys: string[], genreFreq: Record<string, number>, artistFreq: Record<string, number> }> };
   }
 
   const profilesMap = new Map<string, any>();
@@ -271,10 +271,10 @@ export async function getHotContent() {
   // Built from the same 7-day history scan below (no extra PDS fetches); the
   // 7-day window is intentionally reused for v1. genreFreq tolerates both the
   // current `genres: string[]` and legacy Phase-1 `genre: string` records.
-  const userProfiles = new Map<string, { songKeys: Set<string>, genreFreq: Record<string, number> }>();
+  const userProfiles = new Map<string, { songKeys: Set<string>, genreFreq: Record<string, number>, artistFreq: Record<string, number> }>();
   const profileFor = (did: string) => {
     let p = userProfiles.get(did);
-    if (!p) { p = { songKeys: new Set(), genreFreq: {} }; userProfiles.set(did, p); }
+    if (!p) { p = { songKeys: new Set(), genreFreq: {}, artistFreq: {} }; userProfiles.set(did, p); }
     return p;
   };
 
@@ -373,10 +373,10 @@ export async function getHotContent() {
       }))
       .filter(u => u.did);
 
-    const profiles: Record<string, { songKeys: string[], genreFreq: Record<string, number> }> = {};
+    const profiles: Record<string, { songKeys: string[], genreFreq: Record<string, number>, artistFreq: Record<string, number> }> = {};
     for (const [did, p] of userProfiles) {
       if (p.songKeys.size === 0) continue;
-      profiles[did] = { songKeys: Array.from(p.songKeys), genreFreq: p.genreFreq };
+      profiles[did] = { songKeys: Array.from(p.songKeys), genreFreq: p.genreFreq, artistFreq: p.artistFreq };
     }
 
     return { tracks, playlists, users, userProfiles: profiles };
@@ -440,6 +440,8 @@ export async function getHotContent() {
                 const gk = String(g).trim().toLowerCase();
                 if (gk) prof.genreFreq[gk] = (prof.genreFreq[gk] || 0) + 1;
               }
+              const ak = normalizeArtist(v.artist);
+              if (ak) prof.artistFreq[ak] = (prof.artistFreq[ak] || 0) + 1;
             }
 
             if (!v.postUri) continue;
