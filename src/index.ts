@@ -163,7 +163,7 @@ async function tick() {
   }
 }
 
-async function pushCache(key: 'hot' | 'timeline' | 'stats' | 'user_profiles', data: any) {
+async function pushCache(key: 'snapshot' | 'stats', data: any) {
   try {
     const res = await fetch(`${API_URL}/api/cache`, {
       method: 'PUT',
@@ -189,9 +189,13 @@ async function refreshCache() {
     const [hot, timeline] = await Promise.all([getHotContent(), getGlobalTimeline()]);
     // userProfiles feeds the recommendation score; keep it out of the public 'hot' payload.
     const { userProfiles, ...hotPublic } = hot;
-    await pushCache('hot', hotPublic);
-    await pushCache('timeline', timeline);
-    await pushCache('user_profiles', userProfiles ?? {});
+    // Combine the three 5-minute payloads into a single KV write to stay well
+    // under the 1000 writes/day limit. The read endpoints split them back out.
+    await pushCache('snapshot', {
+      hot: hotPublic,
+      timeline,
+      user_profiles: userProfiles ?? {},
+    });
   } catch (e) {
     console.error('[CACHE] Error during refresh:', e);
   }
