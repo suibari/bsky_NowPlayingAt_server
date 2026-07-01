@@ -29,6 +29,16 @@ const HUB_REF = `at://${HUB_DID}/app.bsky.actor.profile/self`;
 // Process slow per-user PDS fetches in batches so callers can render progressively.
 const TIMELINE_BATCH_SIZE = 25;
 
+// Workaround: legacy auto-created favorites have no isDefault flag.
+// Until backfill exists, treat the oldest empty "お気に入り" playlist per user as default.
+function isLegacyDefaultFavorites(record: PlaylistRecord, isOldestForAuthor: boolean): boolean {
+  if (record.isDefault === true) return true;
+  if (record.isDefault === false) return false;
+  if (record.name !== 'お気に入り') return false;
+  if (!Array.isArray(record.tracks) || record.tracks.length > 0) return false;
+  return isOldestForAuthor;
+}
+
 /**
  * Build the global "Discover" timeline.
  */
@@ -78,7 +88,24 @@ export async function getGlobalTimeline() {
       const fetchCollection = async (collection: string, typeName: string) => {
         try {
           const res = await pdsAgent.com.atproto.repo.listRecords({ repo: did, collection, limit: 5 });
+          const oldestPlaylistTs = collection === NSID_PLAYLIST
+            ? res.data.records.reduce<number>((minTs, r: any) => {
+              const ts = new Date(r.value?.createdAt ?? 0).getTime();
+              if (isNaN(ts)) return minTs;
+              return minTs === Number.POSITIVE_INFINITY ? ts : Math.min(minTs, ts);
+            }, Number.POSITIVE_INFINITY)
+            : Number.POSITIVE_INFINITY;
+
           res.data.records.forEach((r: any) => {
+            if (collection === NSID_PLAYLIST) {
+              const playlist = r.value as PlaylistRecord;
+              const ts = new Date(playlist?.createdAt ?? 0).getTime();
+              const isOldestForAuthor = !isNaN(ts) && oldestPlaylistTs !== Number.POSITIVE_INFINITY && ts === oldestPlaylistTs;
+              if (isLegacyDefaultFavorites(playlist, isOldestForAuthor)) {
+                return;
+              }
+            }
+
             batchItems.push({
               type: typeName,
               author: profile || { did, handle: 'unknown' },
@@ -514,13 +541,33 @@ export async function getHotContent() {
       try {
         let cursor: string | undefined = undefined;
         let keepFetching = true;
+        let oldestPlaylistTs = Number.POSITIVE_INFINITY;
+        let oldestPlaylistUri: string | null = null;
+
+        // Workaround pass: find the oldest playlist in the scanned window for this author.
+        try {
+          const firstPage = await pdsAgent.com.atproto.repo.listRecords({ repo: did, collection: NSID_PLAYLIST, limit: 100 });
+          for (const r of firstPage.data.records) {
+            const v = (r.value as any) || {};
+            const ts = new Date(v.createdAt || 0).getTime();
+            if (!isNaN(ts) && ts < oldestPlaylistTs) {
+              oldestPlaylistTs = ts;
+              oldestPlaylistUri = r.uri;
+            }
+          }
+        } catch { /* ignore */ }
+
         while (keepFetching) {
           const pRes = await pdsAgent.com.atproto.repo.listRecords({ repo: did, collection: NSID_PLAYLIST, limit: 100, cursor });
           if (pRes.data.records.length === 0) break;
           
           for (const r of pRes.data.records) {
-            const v = (r.value as any) || {};
+            const v = ((r.value as any) || {}) as PlaylistRecord;
             const tsP = new Date(v.createdAt || 0).getTime();
+            const isOldestForAuthor = oldestPlaylistUri ? r.uri === oldestPlaylistUri : false;
+            if (isLegacyDefaultFavorites(v, isOldestForAuthor)) {
+              continue;
+            }
             if (tsP >= Date.now() - HOT_HISTORY_MS) {
               timelineItems.push({
                 type: 'playlist',

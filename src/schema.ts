@@ -54,6 +54,7 @@ export interface PlaylistRecord {
   name: string;
   tracks: Track[];
   createdAt: string;
+  isDefault?: boolean;
   postUri?: string;
 }
 
