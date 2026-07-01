@@ -67,7 +67,8 @@ async function tick() {
         continue;
       }
 
-      const forcedBypass = hourElapsed && playedRecently;
+      const autoPostEnabled = user.post_probability >= 1;
+      const forcedBypass = autoPostEnabled && hourElapsed && playedRecently;
       const probabilityHit = Math.random() * 100 < user.post_probability;
 
       // Derive genres for the recommendation profile (non-fatal). Done once per
@@ -95,7 +96,7 @@ async function tick() {
         });
 
         if (res.ok) {
-          // 投稿は発生していないので last_scrobble_ts は更新しない（forced 1h bypass 判定を維持）。
+          // 投稿は発生していないので last_scrobble_ts は更新しない（forced 1h bypass(1%以上) 判定を維持）。
           await updateLastScrobbleKeyOnly(user.did, key);
           const body = await res.json().catch(() => ({}));
           if (body.warnings?.length) {
